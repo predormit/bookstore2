@@ -2,6 +2,8 @@ import logging
 import os
 import sqlite3 as sqlite
 import threading
+#import pymongo
+#import pymongo.errors
 import psycopg2
 
 class Store:
@@ -21,7 +23,7 @@ class Store:
             cursor.execute(
                 'CREATE TABLE IF NOT EXISTS "user" ('
                 'user_id TEXT PRIMARY KEY, password TEXT NOT NULL, '
-                'balance INTEGER NOT NULL, token TEXT, terminal TEXT);'
+                'balance BIGINT NOT NULL, token TEXT, terminal TEXT);'
             )
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS user_store("
@@ -34,7 +36,7 @@ class Store:
             )
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS new_order( "
-                "order_id TEXT PRIMARY KEY, user_id TEXT, store_id TEXT,total_price INTEGER,state TEXT)"
+                "order_id TEXT PRIMARY KEY, user_id TEXT, store_id TEXT,total_price BIGINT,state TEXT)"
             )
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS new_order_detail( "
@@ -43,7 +45,7 @@ class Store:
             )
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS archive_order( "
-                "order_id TEXT PRIMARY KEY, user_id TEXT, store_id TEXT, status TEXT,total_price INTEGER)"
+                "order_id TEXT PRIMARY KEY, user_id TEXT, store_id TEXT, state TEXT,total_price BIGINT)"
             )
 
 

@@ -36,13 +36,3 @@ class DBConn:
             return False
         else:
             return True
-        
-    def order_id_exist(self, order_id):
-        cursor = self.cur.execute(
-            'SELECT store_id FROM user_store WHERE order_id = %s;', (order_id,)
-        )
-        row = self.cur.fetchone()
-        if row is None:
-            return False
-        else:
-            return True

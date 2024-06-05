@@ -95,26 +95,28 @@ class Seller(db_conn.DBConn):
 
     def ship_order(self, user_id: str, store_id: str, order_id: str) -> (int, str):
         try:
+
             if not self.user_id_exist(user_id):
                 return error.error_non_exist_user_id(user_id)
             if not self.store_id_exist(store_id):
                 return error.error_non_exist_store_id(store_id)
-            if not self.order_id_exist(order_id):
-                return error.error_invalid_order_id(order_id)
-            '''
-            order = self.db['new_order'].find_one({"order_id": order_id})
-            order_state = order["state"]
+            #if not self.order_id_exist(order_id):
+                #return error.error_invalid_order_id(order_id)
+
             '''
             self.cur.execute(
-                "SELECT status FROM new_order WHERE order_id = %s;",
+                "SELECT state FROM new_order WHERE order_id = %s;",
                 (order_id,)
             )
             row = self.cur.fetchone()
+            if row is None:
+                return error.error_invalid_order_id(order_id)
             order_state = row[0]
+
             if order_state == "unshipped":
 
                 self.cur.execute(
-                    "UPDATE new_order SET status = 'shipped' WHERE order_id = %s;",
+                    "UPDATE new_order SET state = 'shipped' WHERE order_id = %s;",
                     (order_id,)
                 )
                 if self.cur.rowcount == 0:
@@ -124,7 +126,38 @@ class Seller(db_conn.DBConn):
                     return 200, "ok"
             else:
                 return 528, "order state error"
+            '''
+
+            self.cur.execute(
+                "SELECT state FROM new_order WHERE order_id = %s;",
+                (order_id,)
+            )
+            row = self.cur.fetchone()
+            if not row:
+                return error.error_invalid_order_id(order_id)
+
+
+            status = row[0]
+
+            # 检查订单状态是否为已支付
+            if status != 'unshipped':
+                return error.error_not_paid(order_id)
+
+            # 更新订单历史状态为已发货
+            self.cur.execute(
+                "UPDATE new_order SET state = 'shipped' WHERE order_id = %s;",
+                (order_id,)
+            )
+            if self.cur.rowcount == 0:
+                return error.error_invalid_order_id(order_id)
+
+            self.conn.commit()
         except psycopg2.Error as e:
             return 528, "{}".format(str(e))
         except BaseException as e:
             return 530, "{}".format(str(e))
+        finally:
+            self.cur.close()
+            self.conn.close()
+
+        return 200, "ok"

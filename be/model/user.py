@@ -2,11 +2,11 @@ import jwt
 import time
 import logging
 import os
+import sqlite3 as sqlite
 from be.model import error
 from be.model import db_conn
 from fe import conf
 import psycopg2
-
 
 # encode a json string like:
 #   {
@@ -22,7 +22,7 @@ def jwt_encode(user_id: str, terminal: str) -> str:
         key=user_id,
         algorithm="HS256",
     )
-    return encoded
+    return encoded#.encode("utf-8").decode("utf-8")
 
 
 # decode a JWT to a json string like:
@@ -63,21 +63,21 @@ class User(db_conn.DBConn):
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
             self.cur.execute(
-                'INSERT INTO user(user_id, password, balance, token, terminal) '
+                'INSERT INTO "user"(user_id, password, balance, token, terminal) '
                 'VALUES (%s, %s, %s, %s, %s) RETURNING token;',
                 (user_id, password, 0, token, terminal),
             )
             self.conn.commit()
         except psycopg2.Error as e:
-            return error.error_exist_user_id(user_id)
+            return 528, str(e)
         finally:
             self.cur.close()
             self.conn.close()
         return 200, "ok"
 
     def check_token(self, user_id: str, token: str) -> (int, str):
-        cursor = self.cur.execute("SELECT token from user where user_id= %s", (user_id,))
-        row = cursor.fetchone()
+        cursor = self.cur.execute('SELECT token from "user" where user_id=%s', (user_id,))
+        row = self.cur.fetchone()
         if row is None:
             return error.error_authorization_fail()
         db_token = row[0]
@@ -87,7 +87,7 @@ class User(db_conn.DBConn):
 
     def check_password(self, user_id: str, password: str) -> (int, str):
         cursor = self.cur.execute(
-            "SELECT password from user where user_id= %s", (user_id,)
+            'SELECT password from "user" where user_id=%s', (user_id,)
         )
         row = self.cur.fetchone()
         if row is None:
@@ -107,7 +107,7 @@ class User(db_conn.DBConn):
 
             token = jwt_encode(user_id, terminal)
             self.cur.execute(
-                'UPDATE user SET (token, terminal) = (%s, %s) WHERE user_id = %s RETURNING token;',
+                'UPDATE "user" SET (token, terminal) = (%s, %s) WHERE user_id = %s RETURNING token;',
                 (token, terminal, user_id),
             )
             self.conn.commit()
@@ -135,6 +135,7 @@ class User(db_conn.DBConn):
             )
             if self.cur.rowcount == 0:
                 return error.error_authorization_fail()
+
             self.conn.commit()
         except psycopg2.Error as e:
             return 528, "{}".format(str(e))
@@ -181,6 +182,7 @@ class User(db_conn.DBConn):
             )
             if self.cur.rowcount == 0:
                 return error.error_authorization_fail()
+
             self.conn.commit()
         except psycopg2.Error as e:
             return 528, "{}".format(str(e))
@@ -190,3 +192,71 @@ class User(db_conn.DBConn):
             self.cur.close()
             self.conn.close()
         return 200, "ok"
+
+    def search_book(self, title='', content='', tag='', store_id=''):
+        try:
+            cursor = self.conn.cursor()
+
+            query_conditions = []
+            query_parameters = []
+
+            if title:
+                query_conditions.append("title LIKE ?")
+                query_parameters.append(f"%{title}%")
+
+            if content:
+                query_conditions.append("content LIKE ?")
+                query_parameters.append(f"%{content}%")
+
+            if tag:
+                query_conditions.append("tags LIKE ?")
+                query_parameters.append(f"%{tag}%")
+
+            if store_id:
+                # 查询 store 表，获取指定 store_id 下的所有 book_id
+                self.cur.execute("SELECT book_id FROM store WHERE store_id = %s", (store_id,))
+                book_ids = [row[0] for row in self.cur.fetchall()]
+
+                if not book_ids:
+                    return error.error_non_exist_store_id(store_id)
+
+                # 构建 IN 子句，使用多个占位符
+                in_clause = ",".join("?" for _ in book_ids)
+                query_conditions.append(f"id IN ({in_clause})")
+                query_parameters.extend(book_ids)
+
+            if not query_conditions:
+                return 200, "ok"
+
+            
+            parent_path = os.path.dirname(os.path.dirname(__file__))
+            db_s = os.path.join(parent_path, "data/book.db")
+            db_l = os.path.join(parent_path, "data/book_lx.db")
+            if conf.Use_Large_DB:
+                book_db = db_l
+            else:
+                book_db = db_s
+            
+            # 构建查询字符串
+            query_string = "SELECT * FROM book WHERE " + " AND ".join(query_conditions)
+            #book_db = "D:\桌面\dataku\project 2\bookstore\fe\data\book.db"
+            # book_db = "D:\桌面/dataku/project 2/bookstore/fe/data/book.db"
+            conn = sqlite.connect(book_db)
+            cursor = conn.execute(query_string, query_parameters)
+
+            results = cursor.fetchall()
+
+        except psycopg2.Error as e:
+            return 528, str(e)
+        except sqlite.Error as e:
+            return 528, str(e)
+        except BaseException as e:
+            return 530, str(e)
+        finally:
+            self.cur.close()
+            self.conn.close()
+
+        if not results:
+            return 529, "No matching books found."
+        else:
+            return 200, "ok"

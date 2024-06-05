@@ -3,7 +3,7 @@ import json
 import logging
 from be.model import db_conn
 from be.model import error
-from pymongo.errors import PyMongoError
+import psycopg2
 
 
 class Buyer(db_conn.DBConn):
@@ -21,33 +21,34 @@ class Buyer(db_conn.DBConn):
                 return error.error_non_exist_store_id(store_id) + (order_id,)
             order_id = "{}_{}_{}".format(user_id, store_id, str(uuid.uuid1()))
 
-            store_col = self.db['store']
+            #store_col = self.db['store']
             order_details = []
             total_price = 0
             for book_id, count in id_and_count:
-                result_col = store_col.find_one({"store_id": store_id, "book_id": book_id})
-
-                if not result_col:
+                #result_col = store_col.find_one({"store_id": store_id, "book_id": book_id})
+                cursor = self.cur.execute(
+                    "SELECT book_id, stock_level, book_info FROM store "
+                    "WHERE store_id = %s AND book_id = %s;",
+                    (store_id, book_id),
+                )
+                row = self.cur.fetchone()
+                if row is None:
                     return error.error_non_exist_book_id(book_id) + (order_id,)
 
-                stock_level = result_col["stock_level"]
-                book_info = json.loads(result_col["book_info"])
+                stock_level = row[1]
+                book_info = json.loads(row[2])
                 price = book_info.get("price")
                 total_price += price * count
 
                 if stock_level < count:
                     return error.error_stock_level_low(book_id) + (order_id,)
 
-                query = {
-                    "$and": [
-                        {"store_id": store_id},
-                        {"book_id": book_id},
-                        {"stock_level": {"$gte": count}}
-                    ]
-                }
-                new_values = {"$set": {"stock_level": stock_level-count}}
-                result = store_col.update_one(query, new_values)
-                if result.modified_count == 0:
+                self.cur.execute(
+                    "UPDATE store SET stock_level = stock_level - %s "
+                    "WHERE store_id = %s AND book_id = %s AND stock_level >= %s",
+                    (count, store_id, book_id, count),
+                )
+                if self.cur.rowcount == 0:
                     return error.error_stock_level_low(book_id) + (order_id,)
                 order_details.append({
                     "order_id": order_id,
@@ -55,19 +56,21 @@ class Buyer(db_conn.DBConn):
                     "count": count,
                     "price": price
                 })
-               
-            if order_details:
-                self.db['new_order_detail'].insert_many(order_details)   
-            new_order_info = {
-                "order_id": order_id,
-                "store_id": store_id,
-                "user_id": user_id,
-                "total_price": total_price,
-                "state": "Pending",
-            }
-            self.db['new_order'].insert_one(new_order_info)        
-        except PyMongoError as e:
+
+            for detail in order_details:
+                self.cur.execute(
+                    "INSERT INTO new_order_detail (order_id, book_id, count, price) VALUES (%s, %s, %s, %s);",
+                    (detail["order_id"], detail["book_id"], detail["count"], detail["price"])
+                )
+            self.cur.execute(
+                "INSERT INTO new_order (order_id, store_id, user_id, total_price, state) VALUES (%s, %s, %s, %s, %s);",
+                (order_id, store_id, user_id, total_price, "Pending")
+            )
+
+            self.conn.commit()
+        except psycopg2.Error as e:
             logging.info("528, {}".format(str(e)))
+            self.conn.rollback()
             return 528, "{}".format(str(e)), ""
         except BaseException as e:
             logging.info("530, {}".format(str(e)))
@@ -76,86 +79,114 @@ class Buyer(db_conn.DBConn):
         return 200, "ok", order_id
 
     def payment(self, user_id: str, password: str, order_id: str) -> tuple[int, str]:
-        db = self.db
+        cur = self.cur
         try:
-            result = db['new_order'].find_one({"order_id": order_id})
-            if result is None:
+            self.cur.execute(
+                "SELECT user_id, store_id,total_price FROM new_order WHERE order_id = %s;",
+                (order_id,)
+            )
+            row = self.cur.fetchone()
+            if row is None:
                 return error.error_invalid_order_id(order_id)
 
-            order_id = result["order_id"]
-            buyer_id = result["user_id"]
-            store_id = result["store_id"]
-            total_price = result.get("total_price", 0)
+            buyer_id = row[0]
+            store_id = row[1]
+            total_price = row[2]
 
             if buyer_id != user_id:
                 return error.error_authorization_fail()
 
-        
-            result = db['user'].find_one({"user_id": buyer_id}, {"balance": 1, "password": 1})
-            if result is None:
+            self.cur.execute(
+                'SELECT balance, password FROM "user" WHERE user_id = %s;',
+                (buyer_id,)
+            )
+            row = self.cur.fetchone()
+            #result = db['user'].find_one({"user_id": buyer_id}, {"balance": 1, "password": 1})
+            if row is None:
                 return error.error_invalid_order_id(order_id)
-            balance = result['balance']
-            if password != result['password']:
+            balance = row[0]
+            if password != row[1]:
                 return error.error_authorization_fail()
 
-            seller_info = db['user_store'].find_one({"store_id": store_id})
-            if seller_info is None:
+            self.cur.execute(
+                "SELECT user_id FROM user_store WHERE store_id = %s;",
+                (store_id,)
+            )
+            row = self.cur.fetchone()
+            #seller_info = db['user_store'].find_one({"store_id": store_id})
+            if row is None:
                 return error.error_non_exist_store_id(store_id)
-            seller_id = seller_info['user_id']
+            seller_id = row[0]
 
             if not self.user_id_exist(seller_id):
                 return error.error_non_exist_user_id(seller_id)
-            
+            #
             if balance < total_price:
                 return error.error_not_sufficient_funds(order_id)
 
-            buyer_update_result = db['user'].update_one(
-                {"user_id": buyer_id, "balance": {"$gte": total_price}},
-                {"$inc": {"balance": - total_price}}
+            self.cur.execute(
+                'UPDATE "user" SET balance = balance - %s '
+                'WHERE user_id = %s AND balance >= %s',
+                (total_price, buyer_id, total_price),
             )
-            if buyer_update_result.modified_count == 0:
+            if self.cur.rowcount == 0:
                 return error.error_not_sufficient_funds(order_id)
-
-            seller_update_result = db['user'].update_one(
-                {"user_id": seller_id},
-                {"$inc": {"balance": total_price}}
+            #
+            self.cur.execute(
+                'UPDATE "user" SET balance = balance + %s '
+                'WHERE user_id = %s',
+                (total_price, seller_id),
             )
-            if seller_update_result.modified_count == 0:
+            if self.cur.rowcount == 0:
                 return error.error_non_exist_user_id(seller_id)
-
-            update_result = db["new_order"].update_one(
-                {"order_id": order_id},
-                {"$set": {"state": "unshipped"}},
+            #
+            '''
+            self.cur.execute(
+                'UPDATE "new_order" SET state = "unshipped" '
+                'WHERE order_id = %s;',
+                (order_id,)
             )
-            if update_result.modified_count == 0:
+            '''
+            self.cur.execute(
+                "UPDATE new_order SET state = 'unshipped' WHERE order_id = %s;",
+                (order_id,)
+            )
+            if self.cur.rowcount == 0:
                 return error.error_invalid_order_id(order_id)
 
-
-        except PyMongoError as e:
+            self.conn.commit()
+        except psycopg2.Error as e:
             return 528, "{}".format(str(e))
 
         except BaseException as e:
             return 530, "{}".format(str(e))
-       
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok"
 
+
     def add_funds(self, user_id, password, add_value) -> tuple[int, str]:
-        db = self.db
+        cur = self.cur
         try:
-            user_password_result = db['user'].find_one({"user_id": user_id}, {"password": 1})
+            cursor = cur.execute(
+                'SELECT password FROM "user" WHERE user_id = %s', (user_id,)
+            )
+            user_password_result = cur.fetchone()
             if user_password_result is None:
                 return error.error_authorization_fail()
 
-            if user_password_result['password'] != password:
+            if user_password_result[0] != password:
                 return error.error_authorization_fail()
 
-            update_balance_result = db['user'].update_one(
-                {"user_id": user_id},
-                {"$inc": {"balance": add_value}}
+            cur.execute(
+                'UPDATE "user" SET balance = balance + %s WHERE user_id = %s',
+                (add_value, user_id),
             )
-            if update_balance_result.modified_count == 0:
+            if cur.rowcount == 0:
                 return error.error_non_exist_user_id(user_id)
-        except PyMongoError as e:
+            self.conn.commit()
+        except psycopg2.Error as e:
             return 528, "{}".format(str(e))
         except BaseException as e:
             return 530, "{}".format(str(e))
@@ -164,120 +195,200 @@ class Buyer(db_conn.DBConn):
 
     def confirm_order(self, user_id: str, password: str, order_id: str) -> (int, str):
         try:          
-            order_collection = self.db["new_order"]
-            user_collection = self.db["user"]
-            
-            order = order_collection.find_one({"order_id": order_id})
-            if order is None:
+            #order_collection = self.db["new_order"]
+            #user_collection = self.db["user"]
+            cursor = self.cur.execute(
+                'SELECT user_id,state FROM "new_order" WHERE order_id = %s', (order_id,)
+            )
+            row = self.cur.fetchone()
+            #order = order_collection.find_one({"order_id": order_id})
+            if row is None:
                 return error.error_invalid_order_id(order_id)
             
-            if order["user_id"] != user_id:
+            if row[0] != user_id:
                 return error.error_authorization_fail()
             
-            if order["state"] != "shipped":
+            if row[1] != "shipped":
                 return error.error_wrong_state(order_id)
-            
-            user = user_collection.find_one({"user_id": user_id})
-            if user is None or user["password"] != password:
+            cursor = self.cur.execute(
+                'SELECT password FROM "user" WHERE user_id = %s', (user_id,)
+            )
+            row = self.cur.fetchone()
+            #user = user_collection.find_one({"user_id": user_id})
+            if row is None or row[0] != password:
                 return error.error_authorization_fail()
             
-            self.archive_order(order_id, "Received")
-
-        except PyMongoError as e:
+            self.archive_order(order_id, "received")
+            self.conn.commit()
+        except psycopg2.Error as e:
             logging.info("528, {}".format(str(e)))
             return 528, "{}".format(str(e))
         except BaseException as e:
             logging.info("530, {}".format(str(e)))
             return 530, "{}".format(str(e))
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok"
     
     def list_orders(self, user_id: str, password: str, tle=30) -> (int, str, list):
         try:
             result = []
-
-            order_collection = self.db["new_order"]
-            order_archive_collection = self.db["archive_order"]
-            user_collection = self.db["user"]
-            
-            user = user_collection.find_one({"user_id": user_id})
-            if user is None or user["password"] != password:
+            cursor = self.cur.execute(
+                'SELECT password FROM "user" WHERE user_id = %s', (user_id,)
+            )
+            row = self.cur.fetchone()
+            if row is None or row[0] != password:
+                return error.error_authorization_fail() + (result,)
+            #
+            cursor = self.cur.execute(
+                'SELECT order_id,user_id,store_id,state,total_price FROM new_order WHERE user_id = %s', (user_id,)
+            )
+            orders = self.cur.fetchall()
+            if orders is None:
                 return error.error_authorization_fail() + (result,)
 
-            orders = order_collection.find({"user_id": user_id})
             for order in orders:
 
                 output = {
-                    "order_id": order["order_id"],
-                    "user_id": order["user_id"],
-                    "store_id": order["store_id"],
-                    "state": order["state"],
-                    "total_price": order["total_price"],
+                    "order_id": order[0],
+                    "user_id": order[1],
+                    "store_id": order[2],
+                    "state": order[3],
+                    "total_price": order[4],
                 }
                 result.append(output)
 
-            archived_orders = order_archive_collection.find({"user_id": user_id})
-            for archived_order in archived_orders:
+            cursor = self.cur.execute(
+                'SELECT order_id,user_id,store_id,state,total_price FROM "archive_order" WHERE user_id = %s', (user_id,)
+            )
+            archive_orders = self.cur.fetchall()
+            for archived_order in archive_orders:
                 output = {
-                    "order_id": archived_order["order_id"],
-                    "user_id": archived_order["user_id"],
-                    "store_id": archived_order["store_id"],
-                    "state": archived_order["state"],
-                    "total_price": archived_order["total_price"],
+                    "order_id": archived_order[0],
+                    "user_id": archived_order[1],
+                    "store_id": archived_order[2],
+                    "state": archived_order[3],
+                    "total_price": archived_order[4],
                 }
                 result.append(output)  # Append all archived orders to result            
 
-        except PyMongoError as e:
+            self.conn.commit()
+        except psycopg2.Error as e:
             logging.info("528, {}".format(str(e)))
             return 528, "{}".format(str(e)), []
         except BaseException as e:
             logging.info("530, {}".format(str(e)))
             return 530, "{}".format(str(e)), []
+        finally:
+            self.cur.close()
+            self.conn.close()
+
         return 200, "ok", result
     
     def cancel(self, user_id: str, password: str, order_id: str) -> (int, str):
         try:          
-            order_collection = self.db["new_order"]
-            user_collection = self.db["user"]
-            
-            order = order_collection.find_one({"order_id": order_id})
+            #order_collection = self.db["new_order"]
+            #user_collection = self.db["user"]
+
+            cursor = self.cur.execute(
+                'SELECT user_id FROM "new_order" WHERE order_id = %s', (order_id,)
+            )
+            order = self.cur.fetchone()
+            #order = order_collection.find_one({"order_id": order_id})
             if order is None:
                 return error.error_invalid_order_id(order_id)
             
-            if order["user_id"] != user_id:
+            if order[0] != user_id:
                 return error.error_authorization_fail()
-            
-            user = user_collection.find_one({"user_id": user_id})
-            if user is None or user["password"] != password:
-                return error.error_authorization_fail()
-            
-            self.archive_order(order_id, "Cancelled")
 
-        except PyMongoError as e:
+            cursor = self.cur.execute(
+                'SELECT password FROM "user" WHERE user_id = %s', (user_id,)
+            )
+            user = self.cur.fetchone()
+            #user = user_collection.find_one({"user_id": user_id})
+            if user is None or user[0] != password:
+                return error.error_authorization_fail()
+            
+            self.archive_order(order_id, "cancelled")
+            self.conn.commit()
+        except psycopg2.Error as e:
             logging.info("528, {}".format(str(e)))
             return 528, "{}".format(str(e))
         except BaseException as e:
             logging.info("530, {}".format(str(e)))
             return 530, "{}".format(str(e))
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok"
 
     def archive_order(self, order_id, state) -> None:
-        try:
-            assert state in ["Cancelled", "Received"]
-            order_collection = self.db["new_order"]
-            order_archive_collection = self.db["archive_order"]
-            
-            order_info = order_collection.find_one({"order_id": order_id})
-            if order_info is None:
-                raise PyMongoError(f"No order found with order_id: {order_id}")
-            
-            archived_order = order_info.copy()
-            archived_order["state"] = state
-            
-            order_archive_collection.insert_one(archived_order)
-            
-            order_collection.delete_one({"order_id": order_id})
+        # try:
 
-        except PyMongoError as e:
+        #     assert state in ["Cancelled", "Received"]
+
+        #     self.cur.execute(
+        #         'SELECT * FROM new_order WHERE order_id = %s', (order_id,)
+        #     )
+        #     order_info = self.cur.fetchone()
+        #     if order_info is None:
+        #         raise psycopg2.Error(f"No order found with order_id: {order_id}")
+
+        #     archived_order = order_info.copy()
+        #     archived_order[3] = state
+
+        #     self.cur.execute(
+        #         "INSERT INTO archive_order (order_id, store_id, user_id, state, total_price) VALUES (%s, %s, %s, %s, %s);",
+        #         (archived_order[0], archived_order[1], archived_order[2], archived_order[3], archived_order[4])
+        #     )
+
+        #     self.cur.execute('DELETE from new_order where order_id=%s', (order_id,))
+        #     if self.cur.rowcount == 0:
+        #         return error.error_authorization_fail()
+
+        #     self.conn.commit()
+
+        # except psycopg2.Error as e:
+        #     logging.info("528, {}".format(str(e)))
+        #     return
+        # except BaseException as e:
+        #     logging.info("530, {}".format(str(e)))
+        #     return
+        # return
+        try:
+            assert state in ["received", "cancelled"]
+            self.cur.execute(
+                "SELECT user_id, store_id, total_price, status FROM new_order WHERE order_id = %s;",
+                (order_id,)
+            )
+            row = self.cur.fetchone()
+            if not row:
+                return error.error_invalid_order_id(order_id)
+
+            buyer_id, store_id, total_price, status = row
+
+
+            if status != "shipped":
+                return
+
+
+            self.cur.execute(
+                "INSERT INTO archive_order(order_id, user_id, store_id, state, total_price) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (order_id, buyer_id, store_id, state, total_price),
+            )
+            if self.cur.rowcount == 0:
+                return error.error_invalid_order_id(order_id)
+            
+            self.cur.execute(
+                "DELETE FROM new_order WHERE order_id = %s;",
+                (order_id,)
+            )
+
+            self.conn.commit()
+
+        except psycopg2.Error as e:
             logging.info("528, {}".format(str(e)))
             return
         except BaseException as e:
