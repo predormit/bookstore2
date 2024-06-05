@@ -1,10 +1,12 @@
 import jwt
 import time
 import logging
+import os
 from be.model import error
 from be.model import db_conn
-import pymongo
-import pymongo.errors
+from fe import conf
+import psycopg2
+
 
 # encode a json string like:
 #   {
@@ -55,36 +57,43 @@ class User(db_conn.DBConn):
             return False
 
     def register(self, user_id: str, password: str):
+        if self.user_id_exist(user_id):
+            return error.error_exist_user_id(user_id)
         try:
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
-            doc = {"_id": user_id, "user_id": user_id, "password": password, "balance": 0, "token": token, "terminal": terminal}
-            self.db['user'].insert_one(doc)
-        except pymongo.errors.PyMongoError as e:
+            self.cur.execute(
+                'INSERT INTO user(user_id, password, balance, token, terminal) '
+                'VALUES (%s, %s, %s, %s, %s) RETURNING token;',
+                (user_id, password, 0, token, terminal),
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
             return error.error_exist_user_id(user_id)
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok"
 
     def check_token(self, user_id: str, token: str) -> (int, str):
-        # cursor = self.conn.execute("SELECT token from user where user_id=?", (user_id,))
-        # row = cursor.fetchone()
-        doc = self.db['user'].find_one({'user_id': user_id},{'token': 1, '_id': 0})
-        if doc is None:
+        cursor = self.cur.execute("SELECT token from user where user_id= %s", (user_id,))
+        row = cursor.fetchone()
+        if row is None:
             return error.error_authorization_fail()
-        db_token = doc['token']
+        db_token = row[0]
         if not self.__check_token(user_id, db_token, token):
             return error.error_authorization_fail()
         return 200, "ok"
 
     def check_password(self, user_id: str, password: str) -> (int, str):
-        # cursor = self.conn.execute(
-        #     "SELECT password from user where user_id=?", (user_id,)
-        # )
-        # row = cursor.fetchone()
-        doc = self.db['user'].find_one({'user_id': user_id},{'password': 1, '_id': 0})
-        if doc is None:
+        cursor = self.cur.execute(
+            "SELECT password from user where user_id= %s", (user_id,)
+        )
+        row = self.cur.fetchone()
+        if row is None:
             return error.error_authorization_fail()
 
-        if password != doc['password']:
+        if password != row[0]:
             return error.error_authorization_fail()
 
         return 200, "ok"
@@ -97,14 +106,18 @@ class User(db_conn.DBConn):
                 return code, message, ""
 
             token = jwt_encode(user_id, terminal)
-            result = self.db['user'].update_one({'user_id': user_id}, {'$set': {'token': token, 'terminal': terminal}})
-            if result.modified_count == 0:
-                return error.error_authorization_fail() + ("",)
-            
-        except pymongo.errors.PyMongoError as e:
+            self.cur.execute(
+                'UPDATE user SET (token, terminal) = (%s, %s) WHERE user_id = %s RETURNING token;',
+                (token, terminal, user_id),
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
             return 528, "{}".format(str(e)), ""
         except BaseException as e:
             return 530, "{}".format(str(e)), ""
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok", token
 
     def logout(self, user_id: str, token: str) -> bool:
@@ -116,13 +129,20 @@ class User(db_conn.DBConn):
             terminal = "terminal_{}".format(str(time.time()))
             dummy_token = jwt_encode(user_id, terminal)
 
-            result = self.db['user'].update_one({'user_id': user_id}, {'$set': {'token': dummy_token, 'terminal': terminal}})
-            if result.modified_count == 0:
+            cursor = self.cur.execute(
+                'UPDATE "user" SET (token, terminal) = (%s, %s) WHERE user_id = %s RETURNING token;',
+                (dummy_token, terminal, user_id),
+            )
+            if self.cur.rowcount == 0:
                 return error.error_authorization_fail()
-        except pymongo.errors.PyMongoError as e:
+            self.conn.commit()
+        except psycopg2.Error as e:
             return 528, "{}".format(str(e))
         except BaseException as e:
             return 530, "{}".format(str(e))
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok"
 
     def unregister(self, user_id: str, password: str) -> (int, str):
@@ -131,14 +151,18 @@ class User(db_conn.DBConn):
             if code != 200:
                 return code, message
 
-            result = self.db['user'].delete_one({'user_id': user_id})
-            if result.deleted_count == 0:
+            cursor = self.cur.execute('DELETE from "user" where user_id=%s', (user_id,))
+            if self.cur.rowcount == 1:
+                self.conn.commit()
+            else:
                 return error.error_authorization_fail()
-
-        except pymongo.errors.PyMongoError as e:
+        except psycopg2.Error as e:
             return 528, "{}".format(str(e))
         except BaseException as e:
             return 530, "{}".format(str(e))
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok"
 
     def change_password(
@@ -151,11 +175,18 @@ class User(db_conn.DBConn):
 
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
-            result = self.db['user'].update_one({'user_id': user_id}, {'$set': {'password': new_password, 'token': token, 'terminal': terminal}})
-            if result.modified_count == 0:
+            cursor = self.cur.execute(
+                'UPDATE "user" set (password, token, terminal) = (%s, %s, %s) where user_id = %s RETURNING token;',
+                (new_password, token, terminal, user_id),
+            )
+            if self.cur.rowcount == 0:
                 return error.error_authorization_fail()
-        except pymongo.errors.PyMongoError as e:
+            self.conn.commit()
+        except psycopg2.Error as e:
             return 528, "{}".format(str(e))
         except BaseException as e:
             return 530, "{}".format(str(e))
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok"

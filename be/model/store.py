@@ -2,51 +2,63 @@ import logging
 import os
 import sqlite3 as sqlite
 import threading
-import pymongo
-import pymongo.errors
+import psycopg2
 
 class Store:
     database: str
 
     def __init__(self, db_path):
-        self.database = os.path.join(db_path, "be.db")
         self.init_tables()
 
     def init_tables(self):
         try:
-            client = self.get_db_conn()
-            db = client['bookstore']
-            user = db['user']
-            #user.delete_many({})
-            user.create_index("user_id")
-            user_store = db['user_store']
-            #user_store.delete_many({})
-            user_store.create_index([('user_id', 1), ('store_id', 1)], unique=True)
-            store = db['store']
-            #store.delete_many({})
-            store.create_index([('store_id', 1), ('book_id', 1)], unique=True)
-            new_order = db['new_order']
-            #new_order.delete_many({})
-            new_order.create_index([('order_id', 1)], unique=True)
-            new_order_detail = db['new_order_detail']
-            #new_order_detail.delete_many({})
-            new_order_detail.create_index([('order_id', 1), ('book_id', 1)], unique=True)
+            conn = self.get_db_conn()
+            cursor = conn.cursor()
 
-            book = db['book']
-            book.create_index("title")
-            book.create_index("author")
-            book.create_index("pulisher")
-            book.create_index("tags")
-            book.create_index("content")
+            cursor.execute(
+                "TRUNCATE TABLE new_order_detail, new_order, archieve_order, store, user_store, \"user\" RESTART IDENTITY CASCADE"
+            )
+            cursor.execute(
+                'CREATE TABLE IF NOT EXISTS "user" ('
+                'user_id TEXT PRIMARY KEY, password TEXT NOT NULL, '
+                'balance INTEGER NOT NULL, token TEXT, terminal TEXT);'
+            )
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS user_store("
+                "user_id TEXT, store_id TEXT, PRIMARY KEY(user_id, store_id));"
+            )
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS store( "
+                "store_id TEXT, book_id TEXT, book_info TEXT, stock_level INTEGER,"
+                " PRIMARY KEY(store_id, book_id))"
+            )
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS new_order( "
+                "order_id TEXT PRIMARY KEY, user_id TEXT, store_id TEXT,total_price INTEGER,state TEXT)"
+            )
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS new_order_detail( "
+                "order_id TEXT, book_id TEXT, count INTEGER, price INTEGER,  "
+                "PRIMARY KEY(order_id, book_id))"
+            )
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS archive_order( "
+                "order_id TEXT PRIMARY KEY, user_id TEXT, store_id TEXT, status TEXT,total_price INTEGER)"
+            )
 
 
-        except pymongo.errors.PyMongoError as e:
+        except psycopg2.Error as e:
             logging.error(e)
+            conn.rollback()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
 
-
-    def get_db_conn(self) -> pymongo.MongoClient:
-        client = pymongo.MongoClient('mongodb://localhost:27017')
-        return client
+    def get_db_conn(self) -> psycopg2.extensions.connection:
+        conn = psycopg2.connect(database="bookstore2", user="postgres", password="password", host="localhost", port="5432")
+        return conn
 
 
 database_instance: Store = None
