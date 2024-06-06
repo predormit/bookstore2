@@ -1,9 +1,13 @@
 import uuid
 import json
 import logging
+import os
 from be.model import db_conn
 from be.model import error
+from fe.conf import Use_Large_DB
 import psycopg2
+import sqlite3 as sqlite
+from threading import Timer
 
 
 class Buyer(db_conn.DBConn):
@@ -324,38 +328,6 @@ class Buyer(db_conn.DBConn):
         return 200, "ok"
 
     def archive_order(self, order_id, state) -> None:
-        # try:
-
-        #     assert state in ["Cancelled", "Received"]
-
-        #     self.cur.execute(
-        #         'SELECT * FROM new_order WHERE order_id = %s', (order_id,)
-        #     )
-        #     order_info = self.cur.fetchone()
-        #     if order_info is None:
-        #         raise psycopg2.Error(f"No order found with order_id: {order_id}")
-
-        #     archived_order = order_info.copy()
-        #     archived_order[3] = state
-
-        #     self.cur.execute(
-        #         "INSERT INTO archive_order (order_id, store_id, user_id, state, total_price) VALUES (%s, %s, %s, %s, %s);",
-        #         (archived_order[0], archived_order[1], archived_order[2], archived_order[3], archived_order[4])
-        #     )
-
-        #     self.cur.execute('DELETE from new_order where order_id=%s', (order_id,))
-        #     if self.cur.rowcount == 0:
-        #         return error.error_authorization_fail()
-
-        #     self.conn.commit()
-
-        # except psycopg2.Error as e:
-        #     logging.info("528, {}".format(str(e)))
-        #     return
-        # except BaseException as e:
-        #     logging.info("530, {}".format(str(e)))
-        #     return
-        # return
         try:
             assert state in ["received", "cancelled"]
             self.cur.execute(
@@ -398,48 +370,46 @@ class Buyer(db_conn.DBConn):
     
     def search(self, search_key, page=0) -> (int, str, list):
         try:
+            grandparent_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            db_s = os.path.join(grandparent_path, "fe/data/book.db")
+            db_l = os.path.join(grandparent_path, "fe/data/book_lx.db")
+            if Use_Large_DB:
+                book_db = db_l
+            else:
+                book_db = db_s
+            conn = sqlite.connect(book_db)
+
             if page > 0:
                 page_size = 10
                 page_prev = page_size * (page - 1)
-                find_result = self.db["book"].find({
-                    "$or": [
-                        {"title": {"$regex": search_key, "$options": "i"}},
-                        {"author": {"$regex": search_key, "$options": "i"}},
-                        {"publisher": {"$regex": search_key, "$options": "i"}},
-                        {"tags": {"$regex": search_key, "$options": "i"}},
-                        {"content": {"$regex": search_key, "$options": "i"}}
-                    ]
-                }, {"id":1, "title":1, "author":1}).limit(page_size).skip(page_prev)                
-
+                cursor = conn.execute(
+                    "SELECT id, title, author, price FROM book WHERE title LIKE ? OR author LIKE ? OR publisher LIKE ? OR tags LIKE ? OR content LIKE ? LIMIT ? OFFSET ?",
+                    ('%' + search_key + '%', '%' + search_key + '%', '%' + search_key + '%', '%' + search_key + '%',
+                     '%' + search_key + '%', page_size, page_prev),
+                     )
             else:
-                find_result = self.db["book"].find({
-                    "$or": [
-                        {"title": {"$regex": search_key, "$options": "i"}},
-                        {"author": {"$regex": search_key, "$options": "i"}},
-                        {"publisher": {"$regex": search_key, "$options": "i"}},
-                        {"tags": {"$regex": search_key, "$options": "i"}},
-                        {"content": {"$regex": search_key, "$options": "i"}}
-                    ]
-                }, {"id":1, "title":1, "author":1})
-            rows = find_result
+                cursor = conn.execute(
+                    "SELECT id, title, author, price FROM book WHERE title LIKE ? OR author LIKE ? OR publisher LIKE ? OR tags LIKE ? OR content LIKE ?",
+                    ('%' + search_key + '%', '%' + search_key + '%', '%' + search_key + '%', '%' + search_key + '%',
+                     '%' + search_key + '%'),
+                     )
 
-            if rows is None:
-                return 200, "ok", []
+            rows = cursor.fetchall()
 
             result = []
             for row in rows:
                 book = {
-                    "id": row['id'],
-                    "title": row['title'],
-                    "author": row['author']
+                    "id": row[0],
+                    "title": row[1],
+                    "author": row[2],
+                    "price": row[3]
                 }
                 result.append(book)
 
-        except PyMongoError as e:
+        except sqlite.Error as e:
             return 528, "{}".format(str(e)), []
         except BaseException as e:
             return 530, "{}".format(str(e)), []
-        
         return 200, "ok", result
 
     def search_many(self, key_list):
@@ -456,68 +426,61 @@ class Buyer(db_conn.DBConn):
                     continue
                 found_book[item['id']] = item
             result = list(found_book.values())
-        except PyMongoError as e:
+        except sqlite.Error as e:
             return 528, "{}".format(str(e)), []
         except BaseException as e:
             return 530, "{}".format(str(e)), []
-        
+
         return 200, "ok", result
 
     def search_in_store(self, store_id, search_key, page=0):
         try:
-            page_size = 10
+            grandparent_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            db_s = os.path.join(grandparent_path, "fe/data/book.db")
+            db_l = os.path.join(grandparent_path, "fe/data/book_lx.db")
+            if Use_Large_DB:
+                book_db = db_l
+            else:
+                book_db = db_s
+            conn = sqlite.connect(book_db)
+
             if not self.store_id_exist(store_id):
                 return error.error_non_exist_store_id(store_id)
-            book_id_result = self.db['store'].find({'store_id': store_id}, {'book_id':1})
-            book_id_list = []
-            for item in book_id_result:
-                book_id_list.append(item['book_id'])
 
-            if page > 0:
-                page_prev = page_size * (page - 1)
-                find_result = self.db["book"].find({
-                    "$and": [
-                        {
-                        "$or": [
-                            {"title": {"$regex": search_key, "$options": "i"}},
-                            {"author": {"$regex": search_key, "$options": "i"}},
-                            {"publisher": {"$regex": search_key, "$options": "i"}},
-                            {"tags": {"$regex": search_key, "$options": "i"}},
-                            {"content": {"$regex": search_key, "$options": "i"}}
-                            ]
-                        },
-                        {"id": {"$in": book_id_list}}]
-                }, {"id":1, "title":1, "author":1, "price":1}).limit(page_size).skip(page_prev)                
 
-            else:
-                find_result = self.db["book"].find({
-                    "$and": [
-                        {
-                        "$or": [
-                            {"title": {"$regex": search_key, "$options": "i"}},
-                            {"author": {"$regex": search_key, "$options": "i"}},
-                            {"publisher": {"$regex": search_key, "$options": "i"}},
-                            {"tags": {"$regex": search_key, "$options": "i"}},
-                            {"content": {"$regex": search_key, "$options": "i"}}
-                            ]
-                        },
-                        {"id": {"$in": book_id_list}}]
-                }, {"id":1, "title":1, "author":1, "price":1})
-            rows = find_result
-
+            cursor = conn.execute(
+                    "SELECT id, title, author, price FROM book WHERE title LIKE ? OR author LIKE ? OR publisher LIKE ? OR tags LIKE ? OR content LIKE ?",
+                    ('%' + search_key + '%', '%' + search_key + '%', '%' + search_key + '%', '%' + search_key + '%',
+                     '%' + search_key + '%',)
+                     )
+            rows = cursor.fetchall()
+            if  rows is None:
+                return 200, "ok", []
             result = []
             for row in rows:
-                book = {
-                    "id": row["id"],
-                    "title": row["title"],
-                    "author": row["author"],
-                    "price": row["price"]
-                }
-                result.append(book)
+                self.cur.execute(
+                    "SELECT book_info FROM store WHERE store_id = %s AND book_id = %s;",
+                    (store_id, row[0],)
+                )
+                store_rows = self.cur.fetchone()
+                if store_rows is None:
+                    continue
+                else:
+                    book = {
+                        "id": row[0],
+                        "title": row[1],
+                        "author": row[2],
+                        "price": row[3]
+                    }   
+                    result.append(book)
 
-        except PyMongoError as e:
+        except sqlite.Error as e:
             return 528, "{}".format(str(e)), []
         except BaseException as e:
             return 530, "{}".format(str(e)), []
+        finally:
+            self.cur.close()
+            self.conn.close()
         return 200, "ok", result
+
     

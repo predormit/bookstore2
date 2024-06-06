@@ -34,16 +34,6 @@ class Book:
 
 class BookDB:
     def __init__(self, large: bool = False):
-        '''
-        conn = psycopg2.connect(database="bookstore2", user="postgres", password="zxcvbn12", host="localhost",port="5432")
-        cursor = conn.cursor()
-        #client = pymongo.MongoClient('mongodb://localhost:27017')
-        #self.db = client['bookstore']
-        try:
-            self.db.book.create_index([("id", pymongo.ASCENDING)])
-        except:
-            pass
-        '''
         parent_path = os.path.dirname(os.path.dirname(__file__))
         self.db_s = os.path.join(parent_path, "data/book.db")
         self.db_l = os.path.join(parent_path, "data/book_lx.db")
@@ -60,8 +50,6 @@ class BookDB:
 
     def get_book_info(self, start, size) -> [Book]:
         books = []
-        #book_col = self.db['book']
-        #content = book_col.find().skip(start).limit(size)
         conn = sqlite.connect(self.book_db)
         cursor = conn.execute(
             "SELECT id, title, author, "

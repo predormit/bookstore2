@@ -18,7 +18,7 @@ class Store:
             cursor = conn.cursor()
 
             cursor.execute(
-                "TRUNCATE TABLE new_order_detail, new_order, archieve_order, store, user_store, \"user\" RESTART IDENTITY CASCADE"
+                "TRUNCATE TABLE new_order_detail, new_order, archive_order, store, user_store, \"user\" RESTART IDENTITY CASCADE"
             )
             cursor.execute(
                 'CREATE TABLE IF NOT EXISTS "user" ('
