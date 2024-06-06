@@ -22,7 +22,7 @@ class TestSearchBooks:
         self.buyer = register_new_buyer(self.buyer_id, self.password)
         self.gen_book = GenBook(self.seller_id, self.store_id)
         self.temp_order = None
-
+        self.store_id = "store_s_1_1_bef99352-234d-11ef-8ddd-e69a436c88b6"
         yield
 
 
@@ -68,16 +68,21 @@ class TestSearchBooks:
 
     def test_search_in_store_ok(self):
         search_key="谈心"
-        store_id="store_s_1_1_bef99352-234d-11ef-8ddd-e69a436c88b6"
+        store_id= self.store_id
         page=0
         code, result = self.buyer.search_in_store(store_id,search_key,page)
         assert code == 200
 
     def test_search_in_store_page_ok(self):
         search_key="谈心"
-        store_id="store_s_1_1_bef99352-234d-11ef-8ddd-e69a436c88b6"
+        store_id= self.store_id
         page=1
         code, result = self.buyer.search_in_store(store_id,search_key,page)
         assert code == 200
 
-
+    def test_search_in_store_empty(self):
+        search_key="谈心1024"
+        store_id= self.store_id
+        page=0
+        code, result = self.buyer.search_in_store(store_id,search_key,page)
+        assert result==[]

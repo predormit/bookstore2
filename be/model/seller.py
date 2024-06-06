@@ -100,33 +100,9 @@ class Seller(db_conn.DBConn):
                 return error.error_non_exist_user_id(user_id)
             if not self.store_id_exist(store_id):
                 return error.error_non_exist_store_id(store_id)
-            #if not self.order_id_exist(order_id):
-                #return error.error_invalid_order_id(order_id)
+            # if not self.order_id_exist(order_id):
+            #     return error.error_invalid_order_id(order_id)
 
-            '''
-            self.cur.execute(
-                "SELECT state FROM new_order WHERE order_id = %s;",
-                (order_id,)
-            )
-            row = self.cur.fetchone()
-            if row is None:
-                return error.error_invalid_order_id(order_id)
-            order_state = row[0]
-
-            if order_state == "unshipped":
-
-                self.cur.execute(
-                    "UPDATE new_order SET state = 'shipped' WHERE order_id = %s;",
-                    (order_id,)
-                )
-                if self.cur.rowcount == 0:
-                    return 528, "order ship update failed"
-                else:
-                    self.conn.commit()
-                    return 200, "ok"
-            else:
-                return 528, "order state error"
-            '''
 
             self.cur.execute(
                 "SELECT state FROM new_order WHERE order_id = %s;",
@@ -139,11 +115,9 @@ class Seller(db_conn.DBConn):
 
             status = row[0]
 
-            # 检查订单状态是否为已支付
             if status != 'unshipped':
                 return error.error_not_paid(order_id)
 
-            # 更新订单历史状态为已发货
             self.cur.execute(
                 "UPDATE new_order SET state = 'shipped' WHERE order_id = %s;",
                 (order_id,)

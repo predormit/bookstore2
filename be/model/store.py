@@ -31,8 +31,8 @@ class Store:
             )
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS store( "
-                "store_id TEXT, book_id TEXT, book_info TEXT, stock_level INTEGER,"
-                " PRIMARY KEY(store_id, book_id))"
+                "store_id TEXT, book_id TEXT, book_info TEXT, stock_level BIGINT,"
+                "PRIMARY KEY(store_id, book_id))"
             )
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS new_order( "

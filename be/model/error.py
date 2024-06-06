@@ -9,9 +9,9 @@ error_code = {
     517: "stock level low, book id {}",
     518: "invalid order id {}",
     519: "not sufficient funds, order id {}",
-    520: "",
-    521: "",
-    522: "",
+    520: "state error, order id {}",
+    521: "order not paid, order id {}",
+    522: "reached time limit, order id {}",
     523: "",
     524: "",
     525: "",
@@ -59,6 +59,10 @@ def error_not_sufficient_funds(order_id):
 
 def error_wrong_state(order_id):
     return 520, error_code[520].format(order_id)
+
+
+def error_not_paid(order_id):
+    return 521, error_code[521].format(order_id)
 
 
 def error_time_limit_exceed(order_id):
