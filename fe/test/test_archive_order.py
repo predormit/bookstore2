@@ -24,8 +24,6 @@ class TestArchiveOrder:
         assert code == 200
         code = self.buyer.payment(self.order_id)
         assert code == 200
-        # code = self.seller.ship_order(self.seller_id,self.store_id,self.order_id)
-        # assert code == 200
         yield
 
 
@@ -33,21 +31,14 @@ class TestArchiveOrder:
         code = self.buyer.archive_order(self.order_id, "cancelled")
         assert code != 200
 
-    def test_ok(self):
-        code = self.buyer.confirm_order(self.order_id)
+    def test_archive_ok(self):
+        code = self.seller.ship_order(self.seller_id,self.store_id,self.order_id)
+        assert code == 200
+        code = self.buyer.archive_order(self.order_id, "cancelled")
         assert code == 200
 
-    def test_error_user_id(self):
-        self.buyer.user_id = self.buyer.user_id + "_x"
-        code = self.buyer.confirm_order(self.order_id)
+    def test_archive_invalid_order_id(self):
+        code = self.buyer.archive_order(self.order_id + "_x", "cancelled")
         assert code != 200
 
-    def test_error_password(self):
-        self.buyer.password = self.buyer.password + "_x"
-        code = self.buyer.confirm_order(self.order_id)
-        assert code != 200
-
-    def test_error_order_id(self):
-        self.order_id = self.order_id + "_x"
-        code = self.buyer.confirm_order(self.order_id)
-        assert code != 200
+    

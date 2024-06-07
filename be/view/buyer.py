@@ -67,6 +67,15 @@ def cancel():
     code, message = b.cancel(user_id, password, order_id)
     return jsonify({"message": message}), code
 
+@bp_buyer.route("/goodsrejected", methods=["POST"])
+def goodsrejected():
+    user_id = request.json.get("user_id")
+    password = request.json.get("password")
+    order_id = request.json.get("order_id")
+    b = Buyer()
+    code, message = b.goodsrejected(user_id, password, order_id)
+    return jsonify({"message": message}), code
+
 @bp_buyer.route("/search", methods=["POST"])
 def search():
     search_key: str = request.json.get("search_key")
@@ -97,3 +106,11 @@ def check_books_info():
     b = Buyer()
     code, message, result = b.get_book_info(book_list)
     return jsonify({"message": message, "result": result}), code
+
+@bp_buyer.route("/archive_order", methods=["POST"])
+def archive_order():
+    order_id = request.json.get("order_id")
+    state = request.json.get("state")
+    b = Buyer()
+    code, message = b.archive_order(order_id, state)
+    return jsonify({"message": message}), code

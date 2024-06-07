@@ -83,7 +83,6 @@ class Buyer(db_conn.DBConn):
         return 200, "ok", order_id
 
     def payment(self, user_id: str, password: str, order_id: str) -> tuple[int, str]:
-        cur = self.cur
         try:
             self.cur.execute(
                 "SELECT user_id, store_id,total_price FROM new_order WHERE order_id = %s;",
@@ -105,7 +104,6 @@ class Buyer(db_conn.DBConn):
                 (buyer_id,)
             )
             row = self.cur.fetchone()
-            #result = db['user'].find_one({"user_id": buyer_id}, {"balance": 1, "password": 1})
             if row is None:
                 return error.error_invalid_order_id(order_id)
             balance = row[0]
@@ -117,14 +115,13 @@ class Buyer(db_conn.DBConn):
                 (store_id,)
             )
             row = self.cur.fetchone()
-            #seller_info = db['user_store'].find_one({"store_id": store_id})
             if row is None:
                 return error.error_non_exist_store_id(store_id)
             seller_id = row[0]
 
             if not self.user_id_exist(seller_id):
                 return error.error_non_exist_user_id(seller_id)
-            #
+            
             if balance < total_price:
                 return error.error_not_sufficient_funds(order_id)
 
@@ -135,7 +132,7 @@ class Buyer(db_conn.DBConn):
             )
             if self.cur.rowcount == 0:
                 return error.error_not_sufficient_funds(order_id)
-            #
+            
             self.cur.execute(
                 'UPDATE "user" SET balance = balance + %s '
                 'WHERE user_id = %s',
@@ -143,14 +140,7 @@ class Buyer(db_conn.DBConn):
             )
             if self.cur.rowcount == 0:
                 return error.error_non_exist_user_id(seller_id)
-            #
-            '''
-            self.cur.execute(
-                'UPDATE "new_order" SET state = "unshipped" '
-                'WHERE order_id = %s;',
-                (order_id,)
-            )
-            '''
+            
             self.cur.execute(
                 "UPDATE new_order SET state = 'unshipped' WHERE order_id = %s;",
                 (order_id,)
@@ -173,7 +163,7 @@ class Buyer(db_conn.DBConn):
     def add_funds(self, user_id, password, add_value) -> tuple[int, str]:
         cur = self.cur
         try:
-            cursor = cur.execute(
+            cur.execute(
                 'SELECT password FROM "user" WHERE user_id = %s', (user_id,)
             )
             user_password_result = cur.fetchone()
@@ -295,22 +285,21 @@ class Buyer(db_conn.DBConn):
             #order_collection = self.db["new_order"]
             #user_collection = self.db["user"]
 
-            cursor = self.cur.execute(
-                'SELECT user_id FROM "new_order" WHERE order_id = %s', (order_id,)
+            self.cur.execute(
+                'SELECT user_id FROM new_order WHERE order_id = %s', (order_id,)
             )
             order = self.cur.fetchone()
-            #order = order_collection.find_one({"order_id": order_id})
             if order is None:
                 return error.error_invalid_order_id(order_id)
             
             if order[0] != user_id:
                 return error.error_authorization_fail()
 
-            cursor = self.cur.execute(
+            self.cur.execute(
                 'SELECT password FROM "user" WHERE user_id = %s', (user_id,)
             )
             user = self.cur.fetchone()
-            #user = user_collection.find_one({"user_id": user_id})
+
             if user is None or user[0] != password:
                 return error.error_authorization_fail()
             
@@ -327,22 +316,97 @@ class Buyer(db_conn.DBConn):
             self.conn.close()
         return 200, "ok"
 
-    def archive_order(self, order_id, state) -> None:
+    def goodsrejected(self, user_id: str, password: str, order_id: str) -> (int, str):
+        try:
+            cursor = self.cur.execute(
+                'SELECT user_id,store_id,total_price FROM archive_order WHERE order_id = %s', (order_id,)
+            )
+            order = self.cur.fetchone()
+            if order is None:
+                return error.error_invalid_order_id(order_id)
+
+            if order[0] != user_id:
+                return error.error_authorization_fail()
+
+            store_id = order[1]
+            buyer_id = order[0]
+            total_price = order[2]
+            cursor = self.cur.execute(
+                'SELECT password FROM "user" WHERE user_id = %s', (user_id,)
+            )
+            user = self.cur.fetchone()
+
+            if user is None or user[0] != password:
+                return error.error_authorization_fail()
+
+            cursor = self.cur.execute(
+                'SELECT user_id FROM user_store WHERE store_id = %s', (store_id,)
+            )
+            row = self.cur.fetchone()
+            if row is None:
+                return error.error_non_exist_store_id(store_id)
+            seller_id = row[0]
+            cursor = self.cur.execute(
+                'SELECT book_id,count FROM new_order_detail WHERE order_id = %s', (order_id,)
+            )
+            row = self.cur.fetchone()
+            if row is None:
+                return error.error_invalid_order_id(order_id)
+            book_id = row[0]
+            count = row[1]
+            #
+
+            self.cur.execute(
+                "UPDATE store SET stock_level = stock_level + %s "
+                "WHERE store_id = %s AND book_id = %s",
+                (count, store_id, book_id),
+            )
+
+            if self.cur.rowcount == 0:
+                return error.error_stock_level_low(book_id) + (order_id,)
+
+            self.cur.execute(
+                'UPDATE "user" SET balance = balance - %s WHERE user_id = %s',
+                (total_price, seller_id),
+            )
+            if self.cur.rowcount == 0:
+                return error.error_non_exist_user_id(user_id)
+            #
+            self.cur.execute(
+                'UPDATE "user" SET balance = balance + %s WHERE user_id = %s',
+                (total_price, buyer_id),
+            )
+            if self.cur.rowcount == 0:
+                return error.error_non_exist_user_id(user_id)
+
+            self.conn.commit()
+        except psycopg2.Error as e:
+            logging.info("528, {}".format(str(e)))
+            return 528, "{}".format(str(e))
+        except BaseException as e:
+            logging.info("530, {}".format(str(e)))
+            return 530, "{}".format(str(e))
+        finally:
+            self.cur.close()
+            self.conn.close()
+        return 200, "ok"
+
+    def archive_order(self, order_id, state) -> (int, str):
         try:
             assert state in ["received", "cancelled"]
             self.cur.execute(
-                "SELECT user_id, store_id, total_price, status FROM new_order WHERE order_id = %s;",
+                "SELECT user_id, store_id, total_price, state FROM new_order WHERE order_id = %s;",
                 (order_id,)
             )
             row = self.cur.fetchone()
             if not row:
                 return error.error_invalid_order_id(order_id)
 
-            buyer_id, store_id, total_price, status = row
+            buyer_id, store_id, total_price, state = row
 
 
-            if status != "shipped":
-                return
+            if state != "shipped":
+                return error.error_wrong_state(order_id)
 
 
             self.cur.execute(
@@ -350,8 +414,6 @@ class Buyer(db_conn.DBConn):
                 "VALUES (%s, %s, %s, %s, %s)",
                 (order_id, buyer_id, store_id, state, total_price),
             )
-            if self.cur.rowcount == 0:
-                return error.error_invalid_order_id(order_id)
             
             self.cur.execute(
                 "DELETE FROM new_order WHERE order_id = %s;",
@@ -362,11 +424,11 @@ class Buyer(db_conn.DBConn):
 
         except psycopg2.Error as e:
             logging.info("528, {}".format(str(e)))
-            return
+            return 528, "{}".format(str(e))
         except BaseException as e:
             logging.info("530, {}".format(str(e)))
-            return
-        return
+            return 530, "{}".format(str(e))
+        return 200, "ok"
     
     def search(self, search_key, page=0) -> (int, str, list):
         try:
@@ -444,8 +506,8 @@ class Buyer(db_conn.DBConn):
                 book_db = db_s
             conn = sqlite.connect(book_db)
 
-            if not self.store_id_exist(store_id):
-                return error.error_non_exist_store_id(store_id)
+            #if not self.store_id_exist(store_id):
+                #return error.error_non_exist_store_id(store_id)
 
 
             cursor = conn.execute(

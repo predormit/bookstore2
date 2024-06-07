@@ -23,15 +23,6 @@ class Seller(db_conn.DBConn):
                 return error.error_non_exist_store_id(store_id)
             if self.book_id_exist(store_id, book_id):
                 return error.error_exist_book_id(book_id)
-            '''
-            book1 = {
-                "store_id":store_id,
-                "book_id":book_id,
-                "book_info":book_json_str,
-                "stock_level":stock_level
-            }
-            self.db['store'].insert_one(book1)
-            '''
             self.cur.execute(
                 "INSERT INTO store(store_id, book_id, book_info, stock_level) "
                 "VALUES (%s, %s, %s, %s)",
@@ -100,8 +91,6 @@ class Seller(db_conn.DBConn):
                 return error.error_non_exist_user_id(user_id)
             if not self.store_id_exist(store_id):
                 return error.error_non_exist_store_id(store_id)
-            # if not self.order_id_exist(order_id):
-            #     return error.error_invalid_order_id(order_id)
 
 
             self.cur.execute(
@@ -114,7 +103,6 @@ class Seller(db_conn.DBConn):
 
 
             status = row[0]
-
             if status != 'unshipped':
                 return error.error_not_paid(order_id)
 
@@ -125,6 +113,47 @@ class Seller(db_conn.DBConn):
             if self.cur.rowcount == 0:
                 return error.error_invalid_order_id(order_id)
 
+            self.conn.commit()
+        except psycopg2.Error as e:
+            return 528, "{}".format(str(e))
+        except BaseException as e:
+            return 530, "{}".format(str(e))
+        finally:
+            self.cur.close()
+            self.conn.close()
+
+        return 200, "ok"
+    
+    def cancel_ship(self, user_id: str, store_id: str, order_id: str) -> (int, str):
+        try:
+            if not self.user_id_exist(user_id):
+                return error.error_non_exist_user_id(user_id)
+            if not self.store_id_exist(store_id):
+                return error.error_non_exist_store_id(store_id) 
+            
+            self.cur.execute(
+                "SELECT user_id, store_id, total_price, state FROM new_order WHERE order_id = %s;",
+                (order_id,)
+            )
+            row = self.cur.fetchone()
+            if not row:
+                return error.error_invalid_order_id(order_id)
+
+            buyer_id, store_id, total_price, state = row
+            
+            if state != "unshipped":
+                return error.error_wrong_state(order_id)
+
+            self.cur.execute(
+                "INSERT INTO archive_order(order_id, user_id, store_id, state, total_price) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (order_id, buyer_id, store_id, "cancelled", total_price),
+            )
+            
+            self.cur.execute(
+                "DELETE FROM new_order WHERE order_id = %s;",
+                (order_id,)
+            )
             self.conn.commit()
         except psycopg2.Error as e:
             return 528, "{}".format(str(e))

@@ -53,3 +53,12 @@ def ship_order():
     code, message = s.ship_order(user_id, store_id, order_id)
 
     return jsonify({"message": message}), code
+
+@bp_seller.route("/cancel_ship", methods=["POST"])
+def cancel_ship():
+    user_id = request.json.get("user_id")
+    store_id = request.json.get("store_id")
+    order_id = request.json.get("order_id")
+    s = seller.Seller()
+    code, message = s.cancel_ship(user_id, store_id, order_id)
+    return jsonify({"message": message}), code
